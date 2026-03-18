@@ -1,73 +1,72 @@
 import feedparser
 import requests
 import os
+import random
 from datetime import datetime, timedelta
 
-# --- 1. 配置区 ---
-# 更换为更稳定的镜像站节点
-RSSHUB_BASE = "https://rsshub.icu" 
+# --- 1. 容错配置区 ---
+# 定义多个镜像地址，自动轮询防止单个节点失效
+RSSHUB_NODES = [
+    "https://rsshub.app",
+    "https://rsshub.icu",
+    "https://rsshub.rssbuddy.com"
+]
 
-FEEDS = {
-    "🔥 财新网": f"{RSSHUB_BASE}/caixin/finance/charge",
-    "📢 第一财经": f"{RSSHUB_BASE}/yicai/brief",
-    "📊 界面新闻": f"{RSSHUB_BASE}/jiemian/v4/news/22",
-    "⚡ 36氪快讯": f"{RSSHUB_BASE}/36kr/newsflashes",
-    "🏙️ 澎湃财经": f"{RSSHUB_BASE}/thepaper/channel/25951",
-    "📈 东方财富": f"{RSSHUB_BASE}/eastmoney/report/strategy",
-    "💰 21世纪经济": f"{RSSHUB_BASE}/21jingji/channel/investment",
-    "🌐 华尔街见闻": f"{RSSHUB_BASE}/wallstreetcn/news/global"
+FEEDS_PATH = {
+    "🔥 财新网": "/caixin/finance/charge",
+    "📢 第一财经": "/yicai/brief",
+    "📊 界面新闻": "/jiemian/v4/news/22",
+    "⚡ 36氪快讯": "/36kr/newsflashes",
+    "🏙️ 澎湃财经": "/thepaper/channel/25951",
+    "📈 东方财富": "/eastmoney/report/strategy",
+    "💰 21世纪经济": "/21jingji/channel/investment",
+    "🌐 华尔街见闻": "/wallstreetcn/news/global"
 }
 
-# 调低门槛，确保有内容输出
-CORE_KEYWORDS = ["重磅", "紧急", "降息", "加息", "腾讯", "阿里", "美团", "茅台", "英伟达", "突破", "暴涨", "暴跌", "政策"]
-POSITIVE_KEYWORDS = ["股票", "A股", "港股", "美股", "证券", "上市", "财报", "利好", "利空", "大跌", "反弹"]
-NEGATIVE_KEYWORDS = ["理财产品", "保险", "领奖", "推广", "开户福利", "课程", "扫码", "直播间", "视频"]
+# 降低门槛：只要含有这些词，就给分展示
+BASE_KEYWORDS = ["股", "市", "金", "财", "债", "经", "行", "汇"]
+CORE_KEYWORDS = ["重磅", "紧急", "政策", "降息", "加息", "突破", "暴涨", "暴跌"]
 
 def fetch_news():
-    print("🚀 启动深度扫描模式...")
     news_pool = []
-    # 模拟真实浏览器，防止屏蔽
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    }
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
     
-    for name, url in FEEDS.items():
+    # 随机选择一个初始节点
+    base_url = random.choice(RSSHUB_NODES)
+    print(f"🚀 正在通过节点 {base_url} 抓取...")
+
+    for name, path in FEEDS_PATH.items():
         try:
-            resp = requests.get(url, headers=headers, timeout=30)
-            if resp.status_code != 200: continue
-            
+            full_url = f"{base_url}{path}"
+            resp = requests.get(full_url, headers=headers, timeout=25)
             feed = feedparser.parse(resp.text)
-            if not feed.entries: continue
             
+            if not feed.entries:
+                # 如果这个源没抓到，尝试换个节点抓这个源
+                alt_url = random.choice([n for n in RSSHUB_NODES if n != base_url])
+                resp = requests.get(f"{alt_url}{path}", headers=headers, timeout=20)
+                feed = feedparser.parse(resp.text)
+
             for entry in feed.entries:
                 title = entry.title.strip()
-                if any(k in title for k in NEGATIVE_KEYWORDS): continue
-                
-                # 重新计算权重：即使没中关键词，只要有相关性就给基础分
-                score = 5 
+                # 统计基础分：只要标题里有金融相关字眼就给 10 分保底
+                score = 0
+                if any(k in title for k in BASE_KEYWORDS): score += 10
                 if any(k in title for k in CORE_KEYWORDS): score += 20
-                if any(k in title for k in POSITIVE_KEYWORDS): score += 10
                 
-                news_pool.append({
-                    "title": title, 
-                    "link": entry.link, 
-                    "source": name, 
-                    "score": score
-                })
-            print(f"✅ {name} 抓取成功")
+                # 只要有分数（哪怕只有10分）就展示，彻底降低门槛
+                if score >= 10:
+                    news_pool.append({"title": title, "link": entry.link, "source": name, "score": score})
         except:
-            print(f"❌ {name} 连接超时")
             continue
 
+    # 去重
     unique_news = {}
     for item in news_pool:
         t = item['title']
-        if t not in unique_news:
+        if t not in unique_news or item['score'] > unique_news[t]['score']:
             unique_news[t] = item
-        else:
-            unique_news[t]['score'] += 15
-            unique_news[t]['source'] += f"、{item['source']}"
-
+            
     return sorted(unique_news.values(), key=lambda x: x['score'], reverse=True)
 
 def send_message(sorted_news):
@@ -77,21 +76,25 @@ def send_message(sorted_news):
     bj_time = (datetime.utcnow() + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M')
     hot_items, regular_items = [], []
     
-    # 调整分类阈值：25分以上为红旗，其余为普通
-    for item in sorted_news[:20]:
-        content = f"## {item['title']}\n- *来源：{item['source']} | [原文]({item['link']})*\n"
+    # 只要有 25 分就是热点，其余全是快讯
+    for item in sorted_news[:25]:
+        # 视觉精修：##标题巨大，来源行极其微小
+        source_line = f"- *(来源：{item['source']} | [原文]({item['link']}))*"
+        content = f"## {item['title']}\n{source_line}\n"
+        
         if item['score'] >= 25:
             hot_items.append(f"🚩 {content}")
         else:
             regular_items.append(f"🔹 {content}")
 
-    hot_str = "\n".join(hot_items) if hot_items else "> 当前暂无超高权重热点"
-    reg_str = "\n".join(regular_items) if regular_items else "> 正在等待市场动态更新"
+    # 预拼接避免反斜杠报错
+    hot_str = "\n".join(hot_items) if hot_items else "> 暂无重磅标记内容"
+    reg_str = "\n".join(regular_items) if regular_items else "> 暂无基础金融快讯"
     
+    # 顶部数据表
     stat_table = (
         f"| 项目 | 详情 |\n"
         f"| :--- | :--- |\n"
-        f"| 📈 监控渠道 | {len(FEEDS)} 个核心网站 |\n"
         f"| 📦 聚合总数 | {len(sorted_news)} 条 |\n"
         f"| 🔥 重点推荐 | {len(hot_items)} 条 |\n"
         f"| ⏰ 刷新时间 | {bj_time} |\n"
@@ -100,10 +103,10 @@ def send_message(sorted_news):
     desp = (
         f"# 💰 股市全网热点速递\n"
         f"{stat_table}\n"
-        f"### 🚩 【重磅关注】\n{hot_str}\n\n"
+        f"### 🚩 【今日重磅】\n{hot_str}\n\n"
         f"### 📢 【核心快讯】\n{reg_str}\n\n"
         f"--- \n"
-        f"💡 *以上内容根据多源算法实时筛选，仅供参考。*"
+        f"💡 *已大幅降低筛选门槛，确保内容覆盖面。*"
     )
 
     url = f"https://sctapi.ftqq.com/{send_key}.send"
