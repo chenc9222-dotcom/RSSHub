@@ -1,0 +1,36 @@
+name: Financial News Push
+
+on:
+  schedule:
+    - cron: '0 0,3,9 * * *' # 每天北京时间 8点, 11点, 17点 运行
+  workflow_dispatch: # 允许你手动点击运行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install feedparser requests
+
+      - name: Run Spider
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+        run: python news_spider.py
+
+      # 下面是关键：把去重缓存保存下来，防止重复推送
+      - name: Commit and Push Cache
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@github.com"
+          git add news_cache.json || true
+          git commit -m "Update news cache" || true
+          git push || true
