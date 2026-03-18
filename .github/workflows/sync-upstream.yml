@@ -1,0 +1,17 @@
+name: Sync Upstream
+on:
+  schedule:
+    - cron: '0 0 * * *' # 每天北京时间早上 8 点自动执行
+  workflow_dispatch: # 允许你随时手动点击按钮执行更新
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Sync Check
+        uses: tgymnich/fork-sync@v1.10
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          base: master
+          head: master
+          owner: DIYgod
