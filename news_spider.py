@@ -17,12 +17,14 @@ FEEDS = {
     "💰 21世纪经济": f"{RSSHUB_BASE}/21jingji/channel/investment"
 }
 
-# 精准正面词
-POSITIVE_KEYWORDS = ["股票", "A股", "港股", "美股", "证券", "上市", "涨停", "跌停", "财报", "IPO", "分红", "利好", "利空"]
-# 垃圾信息负面词（过滤广告和无关内容）
-NEGATIVE_KEYWORDS = ["理财产品", "保险", "点击领奖", "推广", "开户福利", "课程", "扫码", "视频", "直播间"]
+# 【重点关注词】命中这些词，权重翻倍
+CORE_KEYWORDS = ["重磅", "紧急", "首份", "突破", "暴跌", "暴涨", "停牌", "破产", "降息", "加息", "腾讯", "阿里", "美团", "茅台", "英伟达"]
+# 【普通关键词】
+POSITIVE_KEYWORDS = ["股票", "A股", "港股", "美股", "证券", "上市", "财报", "IPO", "利好", "利空", "增持", "减持"]
+# 【负面垃圾词】
+NEGATIVE_KEYWORDS = ["理财产品", "保险", "领奖", "推广", "开户福利", "课程", "扫码", "直播间", "加群"]
 
-# 动态行情图接口（新浪财经提供，实时更新）
+# 走势图接口
 MARKET_CHARTS = [
     {"name": "上证指数 (A股)", "url": "https://image.sinajs.cn/newchart/min/n/sh000001.gif"},
     {"name": "恒生指数 (港股)", "url": "https://image.sinajs.cn/newchart/min/n/hkHSI.gif"},
@@ -30,77 +32,76 @@ MARKET_CHARTS = [
 ]
 
 def fetch_news():
-    print(f"[{datetime.now()}] 🚀 启动深度筛选模式...")
-    results = []
-    seen_titles = set() # 去重逻辑
-
+    print(f"[{datetime.now()}] 🚀 启动智能热点分析模式...")
+    news_pool = []
+    
     for name, url in FEEDS.items():
         try:
             feed = feedparser.parse(url)
-            if not feed.entries: continue
-
             for entry in feed.entries:
                 title = entry.title.strip()
-                link = entry.link
+                if any(k in title for k in NEGATIVE_KEYWORDS): continue
                 
-                # 逻辑过滤
-                is_target = any(k in title for k in POSITIVE_KEYWORDS)
-                is_trash = any(k in title for k in NEGATIVE_KEYWORDS)
+                # 计算“热力值”
+                score = 0
+                if any(k in title for k in CORE_KEYWORDS): score += 10 # 核心词+10
+                if any(k in title for k in POSITIVE_KEYWORDS): score += 5 # 普通词+5
                 
-                if is_target and not is_trash and title not in seen_titles:
-                    seen_titles.add(title)
-                    # 装修新闻条目
-                    results.append(f"#### **{title}**\n> 来源：`{name}` | [点击查阅]({link})\n---")
-        except Exception as e:
-            print(f"❌ {name} 抓取失败: {e}")
+                if score > 0:
+                    news_pool.append({
+                        "title": title,
+                        "link": entry.link,
+                        "source": name,
+                        "score": score
+                    })
+        except: continue
 
-    return results
+    # 1. 按标题去重
+    unique_news = {}
+    for item in news_pool:
+        title = item['title']
+        if title not in unique_news:
+            unique_news[title] = item
+        else:
+            # 如果多个来源都有，增加热力值
+            unique_news[title]['score'] += 8
+            unique_news[title]['source'] += f"、{item['source']}"
 
-def send_to_server_chan(content_list):
-    send_key = os.environ.get('FEISHU_WEBHOOK') 
-    if not send_key:
-        print("❌ 错误：未找到 SendKey")
-        return
+    # 2. 按分值排序
+    sorted_news = sorted(unique_news.values(), key=lambda x: x['score'], reverse=True)
+    return sorted_news
 
-    # 转换北京时间
+def format_content(sorted_news):
+    hot_news = []
+    regular_news = []
+    
+    for item in sorted_news:
+        formatted = f"#### **{item['title']}**\n> 来源：{item['source']} | [阅读全文]({item['link']})\n"
+        # 评分超过15分的定义为“重点热点”
+        if item['score'] >= 15:
+            hot_news.append(f"🚩【重磅】{formatted}")
+        else:
+            regular_news.append(formatted)
+            
+    return hot_news[:5], regular_news[:10] # 重点前5条，普通前10条
+
+def send_message(hot, regular):
+    send_key = os.environ.get('FEISHU_WEBHOOK')
     bj_time = (datetime.utcnow() + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M')
     
-    # 构造“精装修”报表
-    title = f"📊 股市深度情报 | {bj_time}"
-    
-    # 1. 顶部：行情对比图部分
-    chart_section = "### 📈 实时大盘对比\n"
+    # 装修布局
+    chart_section = "### 📊 全球大盘实时看板\n"
     for chart in MARKET_CHARTS:
         chart_section += f"**{chart['name']}**\n![{chart['name']}]({chart['url']})\n"
+
+    hot_section = "## 🔴 今日必看重磅热点\n" + "\n".join(hot) if hot else ""
+    regular_section = "## 🔵 更多重要市场资讯\n" + "\n".join(regular) if regular else ""
     
-    chart_section += "\n---\n"
-
-    # 2. 中间：统计表格
-    stats_table = (
-        f"| 维度 | 数据内容 |\n"
-        f"| :--- | :--- |\n"
-        f"| 更新时间 | {bj_time} |\n"
-        f"| 精选数量 | {len(content_list)} 条 |\n"
-        f"| 状态 | ✅ 已过滤冗余信息 |\n\n"
-    )
-
-    # 3. 底部：新闻正文
-    if content_list:
-        main_news = "### 🎯 核心新闻精选\n" + "\n".join(content_list)
-    else:
-        main_news = "### 🎯 核心新闻精选\n\n> 💡 暂无高价值波动，建议观察大盘走势。"
-
-    # 汇总
-    desp = f"## 💰 每日金融看板\n" + chart_section + stats_table + main_news + "\n\n📢 *风险提示：资讯均由 AI 聚合，不构成投资建议。*"
-
-    # 发送请求
-    url = f"https://sctapi.ftqq.com/{send_key}.send"
-    try:
-        resp = requests.post(url, data={"title": title, "desp": desp})
-        print(f"✅ 发送成功！响应：{resp.json()}")
-    except Exception as e:
-        print(f"❌ 发送失败：{e}")
+    desp = f"## 💰 每日金融情报箱\n更新时间：{bj_time}\n\n{chart_section}\n---\n{hot_section}\n\n---\n{regular_section}"
+    
+    requests.post(f"https://sctapi.ftqq.com/{send_key}.send", data={"title": f"股市早报 | {bj_time}", "desp": desp})
 
 if __name__ == "__main__":
-    news_data = fetch_news()
-    send_to_server_chan(news_data)
+    all_news = fetch_news()
+    hot, regular = format_content(all_news)
+    send_message(hot, regular)
