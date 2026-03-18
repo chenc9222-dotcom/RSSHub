@@ -1,9 +1,10 @@
-name: Financial News Push
+name: Financial News Pro
 
 on:
   schedule:
-    - cron: '0 0,3,9 * * *' # 每天北京时间 8点, 11点, 17点 运行
-  workflow_dispatch: # 允许你手动点击运行
+    # 每天北京时间 09:00 运行 (UTC 01:00)
+    - cron: '0 1 * * *'
+  workflow_dispatch: # 允许手动点击运行
 
 jobs:
   build:
@@ -18,19 +19,18 @@ jobs:
           python-version: '3.9'
 
       - name: Install dependencies
-        run: |
-          pip install feedparser requests
+        run: pip install feedparser requests
 
       - name: Run Spider
         env:
           FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
         run: python news_spider.py
 
-      # 下面是关键：把去重缓存保存下来，防止重复推送
-      - name: Commit and Push Cache
+      - name: Update Cache
+        # 将 news_cache.json 存回仓库，确保去重生效
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
+          git config --global user.name "Github Robot"
+          git config --global user.email "robot@github.com"
           git add news_cache.json || true
-          git commit -m "Update news cache" || true
+          git commit -m "update cache [skip ci]" || true
           git push || true
